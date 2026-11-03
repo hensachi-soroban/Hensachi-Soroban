@@ -41,7 +41,17 @@ header p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .sheet h2{margin:0;font-size:18px;font-weight:900;color:var(--c);display:flex;justify-content:space-between;align-items:baseline}
 .sheet h2 small{font:500 12px var(--sans);color:var(--muted)}
 .fields{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 12px}
-.fields.four{grid-template-columns:repeat(4,1fr)}
+.fields.three{grid-template-columns:repeat(3,1fr)}
+.grp{display:flex;flex-direction:column;gap:6px}
+.gl{font-size:11.5px;font-weight:700;color:var(--muted);letter-spacing:.08em}
+.mode{display:grid;grid-template-columns:1fr 1fr;padding:3px;background:var(--paper);border:1px solid var(--rule);border-radius:10px;gap:3px}
+.mode button{font:700 14px var(--sans);padding:8px 0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
+.mode button[aria-checked="true"]{background:var(--sheet);color:var(--ink);box-shadow:0 1px 3px rgba(20,28,69,.18)}
+.pend{font-size:13px;color:var(--muted)}
+.est{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;padding:10px 14px;border:1.5px solid var(--c);border-radius:10px}
+.est .k{font-size:13px;font-weight:700;flex-basis:100%}
+.est .v{font:700 28px var(--mono);color:var(--c)}
+.est .s{font-size:13px;color:var(--muted)}
 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);font-weight:500;min-width:0}
 input{font:700 18px var(--mono);width:100%;box-sizing:border-box;padding:8px 6px;border:1.5px solid var(--rule);border-radius:8px;background:var(--paper);color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
 .hero{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:12px 14px;background:var(--redsoft);border-radius:10px}
@@ -109,6 +119,7 @@ tr.cap td{color:var(--muted)}
 
   <p class="note">
     しくみ：偏差値 = 50 + 10 ×（得点 − 平均）÷ 標準偏差。発表された3つの数字から逆算しています。偏差値は小数第1位で四捨五入されて発表されるため、得点が平均点に近いと誤差が大きくなります。<br>
+    「順位で入力」は、得点の分布が正規分布に近いと仮定して、上位何％かから偏差値を推定しています。受験者が少ないテストや、極端に難しい・易しいテストでは誤差が大きくなります。<br>
     4科合計の偏差値は、各教科の偏差値の平均とは一致しません。合計の平均点・得点・偏差値を「4科」タブに入れてください。
   </p>
   <div class="btnrow"><button class="ghost" id="reset">入力をすべて消す</button></div>
@@ -132,9 +143,36 @@ const num=v=>{const n=parseFloat(String(v).replace(/[^\d.\-]/g,""));return isFin
 const f1=n=>(Math.round(n*10)/10).toFixed(1);
 const f2=n=>n.toFixed(2);
 
+// 標準正規分布の逆関数（Acklam）
+function invNorm(p){
+  const a=[-39.69683028665376,220.9460984245205,-275.9285104469687,138.3577518672690,-30.66479806614716,2.506628277459239],
+        b=[-54.47609879822406,161.5858368580409,-155.6989798598866,66.80131188771972,-13.28068155288572],
+        c=[-0.007784894002430293,-0.3223964580411365,-2.400758277161838,-2.549732539343734,4.374664141464968,2.938163982698783],
+        e=[0.007784695709041462,0.3224671290700398,2.445134137142996,3.754408661907416];
+  const pl=0.02425;let q,r;
+  if(p<pl){q=Math.sqrt(-2*Math.log(p));return(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5])/((((e[0]*q+e[1])*q+e[2])*q+e[3])*q+1)}
+  if(p>1-pl){q=Math.sqrt(-2*Math.log(1-p));return-(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5])/((((e[0]*q+e[1])*q+e[2])*q+e[3])*q+1)}
+  q=p-0.5;r=q*q;return(((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q/(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+}
 function calc(d){
-  const mean=num(d.mean),score=num(d.score),dev=num(d.dev),max=num(d.max),sdIn=null;
-  if(mean!==null&&score!==null&&Math.abs(score-mean)<1e-9)return{fifty:true,mean,score};
+  const rankMode=d.mode==="rank";
+  const mean=num(d.mean),score=num(d.score),max=num(d.max),sdIn=null;
+  let dev=num(d.dev),top=null,rankWarn=null;
+  if(mean!==null&&score!==null&&Math.abs(score-mean)<1e-9)return{fifty:true,mean,score,rankMode};
+  if(rankMode){
+    const n=num(d.n),rk=num(d.rank);
+    if(mean===null||score===null||n===null||rk===null)return{err:"受験者数・受験者平均点・キミの得点・キミの順位を入れてね。"};
+    if(n<2||rk<1||rk>n)return{err:"順位は1から受験者数までの数字で入れてね。"};
+    top=(rk-0.5)/n;
+    const z=invNorm(1-top);
+    if(Math.abs(z)<0.05)return{err:"順位がちょうど真ん中あたりなので、計算できません。"};
+    if((score>mean)!==(z>0))return{err:`得点が平均点より${score>mean?"上":"下"}なのに、順位が${z>0?"上":"下"}半分です。数字を確認してね。`};
+    dev=50+10*z;
+    const w=[];
+    if(n<100)w.push("受験者が100人未満なので、目安として見てください。");
+    if(top<0.01||top>0.99)w.push("順位がトップ（または最後）近くなので、誤差が大きくなります。");
+    rankWarn=w.join("")||null;
+  }
   if(mean===null||score===null||dev===null)return{err:"受験者平均点・キミの得点・キミの偏差値の3つを入れてね。"};
   let sd,warn=null,src="逆算";
   if(sdIn&&sdIn>0){sd=sdIn;src="入力値"}
@@ -143,12 +181,13 @@ function calc(d){
     sd=10*(score-mean)/(dev-50);
     if(!(sd>0))return{err:"得点と平均点の大小と、偏差値（50より上か下か）が合っていません。数字を確認してください。",needSd:true};
     const rel=0.05/Math.abs(dev-50);
-    if(rel>0.03)warn=`平均との差が小さいため、結果に約±${Math.round(rel*100)}%の誤差があります。`;
+    if(rankMode)warn=rankWarn;
+    else if(rel>0.03)warn=`平均との差が小さいため、結果に約±${Math.round(rel*100)}%の誤差があります。`;
   }
   const per=10/sd;
   const devOf=x=>50+10*(x-mean)/sd;
   const scoreFor=t=>mean+(t-50)*sd/10;
-  return{mean,score,dev,max,sd,per,devOf,scoreFor,warn,src};
+  return{mean,score,dev,max,sd,per,devOf,scoreFor,warn,src,rankMode,top};
 }
 
 const C=id=>`var(--${id})`;
@@ -161,58 +200,80 @@ function renderTabs(){
 
 function renderSheet(){
   const s=SUBJ.find(x=>x.id===state.tab),d=state.data[s.id],el=document.getElementById("sheet");
+  const rk=d.mode==="rank";
   el.style.setProperty("--c",C(s.id));
   el.innerHTML=`
    <h2>${s.name}${state.example?'<span class="ex">例の数字</span>':''}</h2>
-   <p class="guide">受験者平均とその教科の満点、そしてキミの得点と偏差値を下の欄に入れてね</p>
-   <div class="fields">
-     <label>受験者平均点<input id="f-mean" inputmode="decimal" value="${d.mean??""}"></label>
-     <label>満点<input id="f-max" inputmode="decimal" value="${d.max??""}"></label>
-     <label>キミの得点<input id="f-score" inputmode="decimal" value="${d.score??""}"></label>
-     <label>キミの偏差値<input id="f-dev" inputmode="decimal" value="${d.dev??""}"></label>
+   <div class="mode" role="radiogroup" aria-label="入力のしかた">
+     <button type="button" role="radio" id="m-dev" aria-checked="${!rk}">偏差値で入力</button>
+     <button type="button" role="radio" id="m-rank" aria-checked="${rk}">順位で入力</button>
    </div>
+   <p class="guide">${rk?"受験者数・受験者平均点・満点、そしてキミの得点と順位を下の欄に入れてね":"受験者平均とその教科の満点、そしてキミの得点と偏差値を下の欄に入れてね"}</p>
+   <div class="grp"><span class="gl">テスト全体</span>
+     <div class="fields${rk?" three":""}">
+       ${rk?`<label>受験者数<input id="f-n" inputmode="numeric" value="${d.n??""}"></label>`:""}
+       <label>受験者平均点<input id="f-mean" inputmode="decimal" value="${d.mean??""}"></label>
+       <label>満点<input id="f-max" inputmode="decimal" value="${d.max??""}"></label>
+     </div></div>
+   <div class="grp"><span class="gl">キミの結果</span>
+     <div class="fields">
+       <label>キミの得点<input id="f-score" inputmode="decimal" value="${d.score??""}"></label>
+       ${rk?`<label>キミの順位<input id="f-rank" inputmode="numeric" value="${d.rank??""}"></label>`:`<label>キミの偏差値<input id="f-dev" inputmode="decimal" value="${d.dev??""}"></label>`}
+     </div></div>
    <button class="clear" id="clear" type="button">リセット</button>
    <div id="out"></div>`;
-  ["mean","score","dev","max"].forEach(k=>{
-    const i=document.getElementById("f-"+k);
+  ["mean","score","dev","max","n","rank"].forEach(k=>{
+    const i=document.getElementById("f-"+k);if(!i)return;
     i.addEventListener("input",()=>{d[k]=i.value;state.example=false;save();renderOut();renderOv();
       el.querySelector(".ex")?.remove()});
   });
   document.getElementById("clear").onclick=()=>{
-    ["mean","score","dev"].forEach(k=>{d[k]="";document.getElementById("f-"+k).value=""});
+    ["mean","score","dev","n","rank"].forEach(k=>{d[k]="";const i=document.getElementById("f-"+k);if(i)i.value=""});
     state.example=false;save();el.querySelector(".ex")?.remove();renderOut();renderOv();
-    document.getElementById("f-mean").focus()};
+    document.getElementById(rk?"f-n":"f-mean").focus()};
+  const setMode=m=>{if(d.mode===m||(m==="dev"&&!d.mode))return;d.mode=m;save();renderSheet();renderOv()};
+  document.getElementById("m-dev").onclick=()=>setMode("dev");
+  document.getElementById("m-rank").onclick=()=>setMode("rank");
   renderOut();
 }
 
 function renderOut(){
   const s=SUBJ.find(x=>x.id===state.tab),d=state.data[s.id],o=document.getElementById("out"),r=calc(d);
+  const ok=!r.err&&!r.fifty;
+  if(r.fifty){const di=document.getElementById("f-dev");if(di&&num(di.value)!==50){di.value="50";d.dev="50";save()}}
+  // 目標偏差値の欄は、入力方法や入力の途中かどうかに関係なく、いつも同じ場所に出す
+  const tDefault=d.target||(ok?Math.ceil(r.dev)+3:60);
+  let below="";
   if(r.fifty){
-    const di=document.getElementById("f-dev");
-    if(di&&num(di.value)!==50){di.value="50";d.dev="50";save()}
-    o.innerHTML=`<div class="fifty"><span class="k">平均点と同じ得点なので</span><span class="v">偏差値 50</span><span class="s">得点が平均点と同じ回は、「何点上がれば偏差値がいくつ上がるか」を計算できません。</span></div>`;
-    return}
-  if(r.err){o.innerHTML=`<div class="msg">${r.err}</div>`;return}
-  const rows=[];
-  for(let p=5;p<=50;p+=5){const x=r.score+p;if(r.max&&x>r.max)break;
-    rows.push(`<tr><td class="pl">+${p}点</td><td>${x}<span class="u">点</span></td><td><b>${f1(r.devOf(x))}</b><span class="diff">+${f1(p*r.per)}</span></td></tr>`);
-    if(rows.length>=8)break}
+    below=`<div class="fifty"><span class="k">平均点と同じ得点なので</span><span class="v">偏差値 50</span><span class="s">得点が平均点と同じ回は、「何点上がれば偏差値がいくつ上がるか」を計算できません。</span></div>`;
+  }else if(r.err){
+    below=`<div class="msg">${r.err}</div>`;
+  }else{
+    const est=r.rankMode?`<div class="est"><span class="k">順位から見たキミの偏差値（推定）</span><span class="v">${f1(r.dev)}</span><span class="s">上位 ${(r.top*100).toFixed(1)}%</span></div>`:"";
+    const rows=[];
+    for(let p=5;p<=50;p+=5){const x=r.score+p;if(r.max&&x>r.max)break;
+      rows.push(`<tr><td class="pl">+${p}点</td><td>${x}<span class="u">点</span></td><td><b>${f1(r.devOf(x))}</b><span class="diff">+${f1(p*r.per)}</span></td></tr>`);
+      if(rows.length>=8)break}
+    below=`${est}
+   ${r.warn?`<div class="warn">${r.warn}</div>`:""}
+   ${rows.length?`<table class="steps"><thead><tr><th>上げ幅</th><th>得点</th><th>偏差値</th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<div class="msg">満点のため、これ以上の得点はありません。</div>`}`;
+  }
   o.innerHTML=`
    <div class="target">
      <h3>目標の偏差値から逆算</h3>
-     <div class="trow"><label for="f-target" style="flex-direction:row">目標偏差値</label><div class="stepper"><button type="button" class="stp" id="t-down" aria-label="目標偏差値を1下げる">−</button><input id="f-target" inputmode="decimal" value="${d.target||Math.ceil(r.dev)+3}"><button type="button" class="stp" id="t-up" aria-label="目標偏差値を1上げる">＋</button></div></div>
+     <div class="trow"><label for="f-target" style="flex-direction:row">目標偏差値</label><div class="stepper"><button type="button" class="stp" id="t-down" aria-label="目標偏差値を1下げる">−</button><input id="f-target" inputmode="decimal" value="${tDefault}"><button type="button" class="stp" id="t-up" aria-label="目標偏差値を1上げる">＋</button></div></div>
      <div class="tres" id="tres"></div>
    </div>
-   ${r.warn?`<div class="warn">${r.warn}</div>`:""}
-   ${rows.length?`<table class="steps"><thead><tr><th>上げ幅</th><th>得点</th><th>偏差値</th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<div class="msg">満点のため、これ以上の得点はありません。</div>`}`;
+   ${below}`;
   const ti=document.getElementById("f-target");
   const upd=()=>{d.target=ti.value;save();const t=num(ti.value),tr=document.getElementById("tres");
     if(t===null){tr.textContent="";return}
+    if(!ok){tr.innerHTML=`<span class="pend">上の欄をぜんぶ入れると、偏差値 ${f1(t)} に必要な点数がここに出るよ</span>`;return}
     const need=Math.ceil(r.scoreFor(t)-1e-9),diff=need-r.score;
     if(r.max&&need>r.max){tr.innerHTML=`満点（${r.max}点）でも偏差値 ${f1(r.devOf(r.max))} までです。`;return}
     tr.innerHTML=diff<=0?`いまの得点ですでに届いています。`:`<b>${need}点</b>（あと <b>${diff}点</b>）で偏差値 ${f1(t)} に届きます。`};
   ti.addEventListener("input",upd);
-  const bump=k=>{const t=num(ti.value);const v=(t===null?Math.round(r.dev):t)+k;ti.value=String(Math.round(v*10)/10);upd()};
+  const bump=k=>{const t=num(ti.value);const v=(t===null?(ok?Math.round(r.dev):50):t)+k;ti.value=String(Math.round(v*10)/10);upd()};
   document.getElementById("t-up").onclick=()=>bump(1);
   document.getElementById("t-down").onclick=()=>bump(-1);
   upd();
